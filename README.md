@@ -15,10 +15,11 @@ artigos.csv ──► triagem_titulos.py ──► artigos_triagem.csv ──►
 |---|---|
 | `triagem_titulos.py` | Etapa 1. Triagem por **título**, com expressões regulares. Só Python, sem custo. Adiciona `classification` e `code`. |
 | `triagem_resumos.py` | Etapa 2. Triagem por **título + resumo**, enviada ao Claude. Adiciona `abstract_*` e `final_classification`. |
+| `triagem_resumos_deterministica.py` | Etapa 2 **sem IA**: mesma triagem por título + resumo, só com regras em Python. Sem Claude, sem custo, sem limite de uso. Menos fiel que o Claude (veja a seção 4). |
 | `prompt.md` | Prompt da etapa 2 (critérios IC/EC, arquétipos A–E e códigos de exclusão). |
 
-Este README trata da **etapa 2**, que pode rodar de duas formas: com o **login da sua conta Claude**
-(sem API key) ou com a **API da Anthropic** (com API key).
+Este README trata da **etapa 2**, que pode rodar de três formas: com o **login da sua conta Claude** (sem API key),
+com a **API da Anthropic** (com API key), ou **sem IA**, só com regras em Python (menos fiel, mas sem custo nem limite).
 
 ---
 
@@ -178,7 +179,110 @@ Como funciona e o que observar:
 
 ---
 
-## 3. Entrada e saída
+## 3. Etapa 2 sem IA: `triagem_resumos_deterministica.py`
+
+Faz a mesma triagem por título + resumo **só com regras em Python** (expressões regulares e pontuação). Não usa
+Claude, API nem login: não tem custo, não tem limite de uso e dá sempre o mesmo resultado para a mesma entrada. Leva
+cerca de 40 s para ~10 mil artigos. Grava as **mesmas colunas** da versão com Claude, e a justificativa
+diz qual regra decidiu e quais trechos do título/resumo a acionaram.
+
+```bash
+# testar um artigo avulso
+python3 triagem_resumos_deterministica.py --titulo "Agent S: An Open Agentic Framework" --resumo "We present Agent S ..."
+
+# calibrar com os 50 primeiros artigos
+python3 triagem_resumos_deterministica.py artigos_triagem.csv --amostra 50 --so-avaliados -o amostra.csv
+
+# rodar tudo
+python3 triagem_resumos_deterministica.py artigos_triagem.csv -o triagem_resumo.csv
+```
+
+Requer só Python 3.8+ e os arquivos `triagem_titulos.py` e `triagem_resumos.py` na mesma pasta (reaproveita o
+vocabulário de sinais e a leitura/escrita da planilha). Aceita as mesmas opções de entrada e seleção do
+`triagem_resumos.py` (`-o`, `--amostra`, `--so-avaliados`, `--filtro`, `--sem-resumo`, `--coluna-*`); duplicatas (EC3)
+e artigos sem resumo são tratados exatamente do mesmo jeito.
+
+### Perfis (`--perfil`)
+
+| Perfil | Comportamento | Quando usar |
+|---|---|---|
+| `rigoroso` (padrão) | `yes` só com evidência forte; o que não passa nesse crivo vira `maybe` (as exclusões `no` são as do `revocacao`). Ver "O que o `rigoroso` exige" abaixo. | Quando o resultado do `revocacao` traz `yes` demais e você quer uma lista curta e confiável de `yes`. |
+| `revocacao` | `yes` mais amplo; só dá `no` com evidência forte; na dúvida, `maybe`. Coerente com o `prompt.md` ("favorável à revocação"). | Triagem de apoio em que **não se pode perder** artigo relevante. |
+| `precisao` | Aplica todas as regras de exclusão (EC1, EC2, NIC1, NIC8). Mais `no`, menos leitura, mas perde artigos relevantes. | Quando o tempo de leitura pesa mais do que a revocação. |
+
+**O que o `rigoroso` exige para dar `yes`** (tudo o que não cumprir vira `maybe`, ou `no` se uma exclusão clara valer):
+
+- **A (estudo secundário):** termo forte de revisão **no título** (survey, review, taxonomy, overview, SoK...), o
+  resumo também se declara revisão ("this survey", "we review"...), menciona arquitetura/organização (arquitetura,
+  framework, taxonomia, paradigma, padrão, componentes, pipeline...), tem multimodal forte, algum sinal de método ou
+  avaliação e tema âncora no título (multimodal, LLM, agentes, paradigma cognitivo). Não pode ser revisão de um
+  domínio de aplicação nem de avaliação.
+- **B (agentes):** LLM no contexto, agente em sentido de LLM (não otimização/RL), "agente" no título e ≥3 menções no
+  resumo, ≥2 componentes distintos (ou padrão de projeto/arquitetura no título), pontuação de estrutura ≥3, termo de
+  arquitetura no resumo e entrada multimodal forte (ou, em padrões de projeto, arquitetura descrita).
+- **D (RAG):** recuperação aumentada de verdade (RAG, "retrieval-augmented"...) com LLM/geração, estrutura descrita,
+  ≥2 componentes, ≥4 menções a RAG/recuperação e ≥2 sinais de validação; "image retrieval", "text-video retrieval"
+  e hashing não contam.
+- **C/E (framework multimodal):** exceção restrita a EC1 do `prompt.md` aplicada à risca: o resumo **declara**
+  "propomos/apresentamos um framework/sistema/arquitetura/pipeline" (e não rede, modelo, método, atenção ou perda),
+  descreve vários componentes e a organização (fusão, etapas, ramos), cita arquitetura/organização, tem entrada
+  multimodal forte, mostra ≥4 sinais de validação (experimento, benchmark, resultados...) e não é dataset/benchmark
+  nem procedimento de treino (distilação, aprendizado contrastivo...).
+
+Os limiares ficam no topo do arquivo (`RIG_ESTRUTURA_MIN`, `RIG_TRICK_MAX`, `RIG_IMPL_MIN_CE`, `RIG_IMPL_MIN_D`,
+`RIG_RAG_MIN_D`, `RIG_DESIGN_MIN_D`, `RIG_DESIGN_MIN_B`, `RIG_AGENT_MIN_B`, `RIG_ESTRUTURA_MIN_B`). Em C/E o conjunto ouro é o limite: apertar mais faz ao menos um ouro deixar de
+ser `yes`. Em A, B e D o ouro tem poucos artigos (5, 5 e 1) e não limita; dá para apertar mais, mas sem como validar.
+
+## 4. O quanto confiar nas regras (medido)
+
+Comparei as regras com os rótulos do Claude em `amostra_1000.csv` (1000 artigos) e com o conjunto ouro
+(`artigos_ouro.csv`). Os 1000 artigos foram divididos em 60% para **desenvolvimento** (onde as regras foram
+calibradas) e 40% para **teste cego** (não usado para ajustar nada). "Revocação dos `yes`" é a fração dos
+artigos que o Claude marcou `yes` e que as regras mantiveram como `yes` ou `maybe`.
+
+| Perfil | Conjunto | Concordância de classe com o Claude | Revocação dos `yes` do Claude | Artigos marcados para leitura (Claude: 49–55%) |
+|---|---|---|---|---|
+| `revocacao` | desenvolvimento | 42,5% | 94,2% | 80,0% |
+| `revocacao` | **teste cego** | 42,2% | **86,1%** | 76,4% |
+| `precisao` | desenvolvimento | 53,0% | 63,2% | 47,0% |
+| `precisao` | **teste cego** | 54,0% | **55,1%** | 41,3% |
+
+**Conjunto ouro:** os 15 artigos saem `yes` nos três perfis.
+
+Perfil `rigoroso` na mesma amostra (as regras novas foram ajustadas olhando os erros do conjunto de
+desenvolvimento; o de teste só foi consultado para medir):
+
+| Conjunto | `yes` das regras (Claude marcou 33–37%) | Dos `yes` das regras, quantos o Claude também marcou `yes` | `yes` do Claude que viraram `yes` | `yes` do Claude mantidos como `yes` ou `maybe` |
+|---|---|---|---|---|
+| desenvolvimento | 5,0% | 62,1% | 9,5% | 88,4% |
+| **teste** | 4,7% | **75,0%** | 9,5% | 74,1% |
+
+Na planilha completa de 16.052 artigos, os `yes` passaram de 4.967 (`revocacao`, 31%) para 485 (`rigoroso`, 3,0%).
+
+Como ler esses números:
+
+- **As regras não substituem o Claude.** A concordância exata de classe fica em torno de 42–54%; para comparação,
+  "sempre `no`" acertaria ~46%. Nos artigos do tipo "modelo multimodal de ML" (a maioria do corpus), a fronteira entre
+  `E` (framework), `EC1` (modelo de ML puro) e `M` é uma decisão semântica que o vocabulário quase não revela: nem o
+  próprio Claude é consistente entre artigos muito parecidos.
+- **Não é falta de esforço nas regras.** Um classificador treinado nos mesmos 600 artigos (TF-IDF + regressão
+  logística, e até um GBM com todos os meus sinais) também fica em ~52–55% no teste. Com esses dados, esse parece ser o
+  teto de qualquer abordagem baseada em texto.
+- **O que as regras fazem bem:** descartar "multimodal" em sentido não computacional e artigos sem nenhum sinal de
+  multimodalidade/LLM/agentes (`NIC7`, ~92% de acerto), reconhecer surveys, agentes e RAG com vocabulário claro, e
+  filtrar benchmarks, segurança e técnicas estreitas.
+- **O perfil `rigoroso` troca revocação por confiança:** a lista de `yes` fica curta e ~62–75% deles também são `yes`
+  para o Claude, mas só ~10% dos `yes` do Claude chegam como `yes` (a maioria vira `maybe`). Por isso **leia também os
+  `maybe`**: ele serve para priorizar a leitura, não para descartar artigos.
+- **O perfil `revocacao` filtra pouco:** marca ~76–80% dos artigos para leitura, contra ~50% do Claude; economiza
+  cerca de 1 em cada 4 leituras e perde ~6–14% dos `yes` do Claude. O perfil `precisao` marca quase a mesma fração
+  que o Claude, mas perde 37–45% dos `yes`.
+- **Referência é o Claude, não a verdade.** Os rótulos de comparação são do Claude com o `prompt.md` atual, não de
+  revisão humana. Trate o resultado das regras como triagem de apoio e revise `yes` e `maybe`.
+
+---
+
+## 5. Entrada e saída
 
 **Entrada.** CSV com ao menos `title` e `abstract`. Se houver a coluna `classification` (da etapa 1), só
 vão ao Claude as linhas `yes` e `maybe` (mude com `--filtro`). Sem essa coluna, **todas** as linhas são
@@ -205,7 +309,7 @@ Tratamento automático, sem chamar o Claude:
 
 ---
 
-## 4. Opções
+## 6. Opções (versão com Claude)
 
 | Opção | Efeito |
 |---|---|
@@ -229,7 +333,7 @@ Tratamento automático, sem chamar o Claude:
 
 ---
 
-## 5. Retomada e cache
+## 7. Retomada e cache (versão com Claude)
 
 - Cada resposta é gravada em `<saida>.respostas.jsonl`. Rodar de novo **não reenvia** artigos já
   avaliados, o que vale para os dois backends (interrupção, limite de uso, falha de rede).
@@ -239,7 +343,7 @@ Tratamento automático, sem chamar o Claude:
 
 ---
 
-## 6. Problemas comuns
+## 8. Problemas comuns (versão com Claude)
 
 | Mensagem | Causa e solução |
 |---|---|

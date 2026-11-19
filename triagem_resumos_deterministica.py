@@ -59,6 +59,46 @@ SEC_ABS = R(r"\b(this|the present|our|the following|present)\s+(paper|article|wo
 SEC_TITLE_STRONG = R(r"\bsurvey\b|\breview\b|\btaxonom|\boverview\b|\bsok\b|systematization|road[\s-]?map|"
                      r"mapping study|literature|state[\s-]of[\s-]the[\s-]art|\bperspective|\btutorial\b|"
                      r"challenges and|opportunities|future directions|recent advances|\badvances in\b|\bprimer\b")
+# Perfil "rigoroso": termos de estudo secundário só no título (sem "perspective", "challenges", "advances"...)
+SEC_TITLE_FORTE = R(r"\bsurvey|\breview\b|\btaxonom|\boverview\b|\bsok\b|systematization|road[\s-]?map|"
+                    r"mapping study|literature|\btutorial\b|\bprimer\b")
+# Recuperação aumentada de verdade (RAG), e não "image retrieval"/"cross-modal retrieval"/hashing
+RAG_PROPER = R(r"\brag\b|retrieval[\s-]augment\w*|augment\w* (generation|with retriev\w*)|retrieve[\s-]and[\s-]"
+               r"(generate|read)|retriev\w* (and|then|before) (generat\w*|answer\w*|reason\w*)|"
+               r"(knowledge|memory|evidence|document|context) retriev\w*|retriev\w*[\s-](based|enhanced|grounded)")
+RETRIEVAL_TASK = R(r"\b(image|video|text|cross[\s-]modal|multi-?modal|sketch|person|moment|audio|music|visual|"
+                   r"remote[\s-]sensing|medical report|hashing)[\s-]*(-to-)?(text|image|video)?[\s-]*(retrieval|search|hashing)\b|"
+                   r"\bhashing\b")
+# "framework" que na verdade é um procedimento de treino/avaliação (EC1), não arquitetura
+TRICK_FW = R(r"\b(contrastive|distillation|pre-?training|fine-?tuning|training|learning|alignment|adaptation|"
+             r"augmentation|optimi[sz]ation|evaluation|benchmarking|unlearning|regulari[sz]ation|self-?supervised|"
+             r"curriculum|meta-?learning|reinforcement learning|rl|attack|defen[cs]e)\s+(\w+\s)?framework\b")
+# Agentes em sentido de LLM (não otimização/RL clássico)
+AGENT_LLM_TITLE_BAD = R(r"\b(path planning|algorithm optimi[sz]ation|optimization|prediction|reinforcement|q-learning|"
+                        r"scheduling|resource allocation|meta-?learning|distillation|sample efficient)\b")
+
+RIG_IMPL_MIN_CE = 4    # perfil rigoroso, C/E: mínimo de sinais de validação (experimento, benchmark, resultados...)
+RIG_IMPL_MIN_D = 2     # perfil rigoroso, D: idem
+RIG_RAG_MIN_D = 4      # perfil rigoroso, D: mínimo de menções a RAG/recuperação no resumo
+RIG_DESIGN_MIN_D = 2   # perfil rigoroso, D: mínimo de componentes distintos descritos
+RIG_AGENT_MIN_B = 3    # perfil rigoroso, B: mínimo de menções a agente no resumo
+RIG_ESTRUTURA_MIN_B = 3  # perfil rigoroso, B: pontuação mínima de estrutura (componentes + organização + arquitetura)
+RIG_DESIGN_MIN_B = 2   # perfil rigoroso, B: mínimo de componentes distintos descritos (ou padrão de projeto no título)
+RIG_TRICK_MAX = 3      # perfil rigoroso: máximo de termos de treino/técnica (perda, distilação, atenção...) no resumo
+RIG_ESTRUTURA_MIN = 4  # perfil rigoroso: pontuação mínima de estrutura (componentes + organização + arquitetura)
+
+# Declaração explícita: "we propose/introduce ... a (novel) ... framework/system/architecture ..."
+DECL_FW = R(r"\b(propose|present|introduce|develop|design|build|construct|devise|establish|put forward|implement|"
+            r"create|offer|describe|report)[sd]?\b(?P<meio>[^.;]{0,50}?)\b(a|an|the|our)\s+(?P<mod>(?:[\w-]+\s+){0,5}?)"
+            r"(framework|system|architecture|pipeline|platform|toolkit|workflow|infrastructure|middleware|toolbox|"
+            r"ecosystem)\b")
+DECL_BAD_MOD = R(r"\b(network|net|model|method|approach|algorithm|loss|attention|classifier|detector|module|"
+                 r"mechanism|layer|training|learning|distillation|alignment)\b")
+
+# Termos que mostram que a revisão olha para arquitetura/organização (e não só para resultados)
+ARCH_TERM = R(r"architect|framework|taxonom|paradigm|pattern|design (principle|choice|space)|reference model|"
+              r"component|modular|pipeline|workflow")
+
 CONCEPTUAL = R(r"\b(position paper|conceptual (framework|model|paper|analysis)|vision paper|we argue|we envision|"
                r"we advocate|we contend|we posit|this (position|vision|perspective)|theoretical (framework|analysis|"
                r"perspective)|thought experiment|we outline|we discuss|we reflect|manifesto|call to action)\b")
@@ -220,6 +260,24 @@ def extrair(titulo, resumo):
     f["arch_a"] = len(re.findall(r"\barchitectur\w*|\bplatform\b|\btoolkit\b|\binfrastructure\b|\bmiddleware\b|"
                                  r"\bpipeline\b|\bworkflow\b|\bmodular\b|\bend-to-end system\b|\bsoftware\b|"
                                  r"\bdeploy\w*", a, re.I))
+    # --- sinais extras do perfil "rigoroso"
+    t_sem = TT.SEC_PRE_REMOVE.sub(" ", t)
+    f["sec_t_forte"] = bool(SEC_TITLE_FORTE.search(t_sem))
+    f["anchor_t"] = (TT.mm_signal(t) == "strong") or bool(TT.LLM_RX.search(t)) or f["agent_t"] or \
+        bool(TT.COGNITIVE.search(t))
+    f["rag_proper"] = bool(RAG_PROPER.search(ta))
+    f["rag_task"] = bool(RETRIEVAL_TASK.search(ta)) and not RAG_PROPER.search(ta)
+    f["arch_term_a"] = bool(ARCH_TERM.search(a))
+    f["fw_decl"] = False
+    for m in DECL_FW.finditer(a):
+        if not DECL_BAD_MOD.search(m.group("mod")):
+            f["fw_decl"] = True
+            break
+    f["trick_fw"] = bool(TRICK_FW.search(a)) or bool(TRICK_FW.search(t))
+    f["agent_bad_t"] = bool(AGENT_LLM_TITLE_BAD.search(t))
+    f["pattern_t"] = bool(re.search(r"design patterns?|architectur|reference architecture|taxonomy|framework", t, re.I))
+    f["fusion_n"] = len(re.findall(r"\bfusion|\bfuse|\bfusing|\bintegrat\w*|\bcombin\w*", a, re.I))
+    f["estrutura_score"] = f["design_n"] + f["org_n"] + min(f["arch_a"], 3)
     return f
 
 
@@ -239,8 +297,9 @@ def _r(cls, code, ic, ec, just):
     return {"classification": cls, "code": code, "ic": ic, "ec": ec, "justificativa": just}
 
 
-def decidir(f, perfil="revocacao"):
+def decidir(f, perfil="rigoroso"):
     estrito = perfil == "precisao"
+    rig = perfil == "rigoroso"  # exclusões como em "revocacao"; `yes` só com evidência forte
     t, a = f["t"], f["a"]
     sinais = bool(f["mm"] or f["llm"] or f["agent_n"] or f["agent_t"])
     tema_ok = bool(f["mm"] or f["llm"] or f["agent_n"] or f["agent_t"] or f["cognitive"])
@@ -258,7 +317,13 @@ def decidir(f, perfil="revocacao"):
         return _r("no", "NIC7", [], [], "Nem o título nem o resumo trazem dados multimodais, LLM ou agentes.")
 
     # ---- A: estudo secundário
-    if f["sec_t"] or f["sec_a"]:
+    # No perfil rigoroso o estudo secundário precisa de termo forte de revisão NO TÍTULO, o resumo também se declarar
+    # revisão, termos de arquitetura/organização, multimodal forte, algum sinal de método/avaliação e tema âncora no título (multimodal/LLM/agentes/paradigma cognitivo), sem ser revisão
+    # de domínio de aplicação nem de avaliação.
+    sec_ok = (f["sec_t"] or f["sec_a"]) if not rig else (
+        f["sec_t_forte"] and f["sec_a"] and f["arch_term_a"] and f["arch_a"] >= 1 and f["mm"] == "strong" and
+        f["impl_n"] >= 1 and f["anchor_t"] and not f["app"] and not f["eval_t"])
+    if sec_ok:
         if tema_ok:
             risco_estreito = (f["sec_risk_t"] or f["narrow_t"]) and not re.search(
                 r"(?i)architect|framework|paradigm|evolution|landscape|ecosystem|agent|design|taxonomy", t)
@@ -273,13 +338,25 @@ def decidir(f, perfil="revocacao"):
         return _r("no", "EC5", _ic(f), ["EC5"], "Proposta conceitual/posicionamento, sem implementação, experimento ou validação no resumo.")
 
     # ---- D: recuperação aumentada com entrada não textual
-    if (f["rag_t"] or f["rag_n"] >= 2) and f["nontext"] and (f["fw_t"] or f["fw_a"] or f["design_n"] >= 1 or f["rag_t"]):
+    d_base = (f["rag_t"] or f["rag_n"] >= 2) and f["nontext"] and (f["fw_t"] or f["fw_a"] or f["design_n"] >= 1 or f["rag_t"])
+    if rig:  # RAG de verdade (não "image retrieval"/hashing), com LLM/geração e estrutura descrita
+        d_base = d_base and f["rag_proper"] and not f["rag_task"] and (f["llm"] or f["agent_n"] >= 1) and \
+            (f["fw_a"] or f["design_n"] >= 2 or f["rag_t"]) and f["rag_n"] >= RIG_RAG_MIN_D and \
+            f["impl_n"] >= RIG_IMPL_MIN_D and f["design_n"] >= RIG_DESIGN_MIN_D
+    if d_base:
         return _r("yes", "D", _ic(f, ["IC1", "IC8", "IC9"]), [],
                   f"Recuperação aumentada com entrada não textual e saída em texto ({_fmt(_ev(RAG_STRONG, a or t))}).")
 
     # ---- B: sistemas baseados em agentes
-    if (f["agent_t"] or f["agent_n"] >= 2) and f["agent_ctx"] and not f["agent_classic"]:
-        if f["design_n"] >= 1 or f["fw_a"] or f["fw_t"] or f["agent_t"]:
+    if (f["agent_t"] or f["agent_n"] >= 2) and f["agent_ctx"] and not f["agent_classic"] and not (
+            rig and (not f["llm"] or f["agent_bad_t"] or f["trick_fw"])):
+        b_ok = f["design_n"] >= 1 or f["fw_a"] or f["fw_t"] or f["agent_t"]
+        if rig:  # sistema de agentes: declarado como framework/sistema/padrão E com componentes descritos
+            b_ok = (f["design_n"] >= RIG_DESIGN_MIN_B or (f["pattern_t"] and (f["fw_a"] or f["arch_a"] >= 2))) and \
+                (f["mm"] == "strong" or (f["pattern_t"] and f["arch_a"] >= 2)) and \
+                f["agent_n"] >= RIG_AGENT_MIN_B and f["estrutura_score"] >= RIG_ESTRUTURA_MIN_B and \
+                f["agent_t"] and f["arch_term_a"]
+        if b_ok:
             return _r("yes", "B", _ic(f, ["IC1", "IC8"]), [],
                       f"Sistema baseado em agentes ({_fmt(_ev(AGENT_WORD, f['ta'], 2), f['design_ev'])}).")
         return _r("maybe", "M", _ic(f), [], "Trata de agentes, mas o resumo não descreve os componentes: decidir pelo texto completo.")
@@ -307,7 +384,19 @@ def decidir(f, perfil="revocacao"):
 
     # ---- C / E: framework, sistema ou arquitetura
     estrutura = f["fw_a"] or f["fw_t"]
-    if estrutura and (f["design_n"] >= 2 or f["arch_a"] >= 1 or f["org_n"] >= 2) and not (f["trick_t"] and f["model_only"] and not f["fw_a"]):
+    if rig:
+        # Exceção restrita a EC1: (a) os autores declaram framework/sistema/arquitetura (verbo + framework no
+        # resumo, que não seja procedimento de treino/avaliação) e (b) a organização de ponta a ponta aparece
+        # (vários componentes/ramos/etapas, fusão e saída).
+        ce_ok = f["fw_decl"] and not f["trick_fw"] and f["estrutura_score"] >= RIG_ESTRUTURA_MIN and \
+            f["design_n"] >= 1 and (f["fusion_n"] >= 1 or f["agent_n"] >= 1 or f["eng"] or f["arch_a"] >= 2) and \
+            f["trick_n"] <= RIG_TRICK_MAX and not (f["trick_t"] and not f["fw_t"]) and \
+            not f["model_only"] and not f["bench_t"] and not f["bench_a"] and f["mm"] == "strong" and \
+            f["impl_n"] >= RIG_IMPL_MIN_CE and f["arch_term_a"]
+    else:
+        ce_ok = estrutura and (f["design_n"] >= 2 or f["arch_a"] >= 1 or f["org_n"] >= 2) and not (
+            f["trick_t"] and f["model_only"] and not f["fw_a"])
+    if ce_ok:
         cod = "C" if (f["eng"] or f["arch_a"] >= 2) else "E"
         ic = _ic(f, ["IC1", "IC8"] + (["IC2"] if f["eng"] else []))
         return _r("yes", cod, ic, [],
@@ -326,9 +415,10 @@ def decidir(f, perfil="revocacao"):
     return _r("maybe", "M", _ic(f), [], "O resumo não permite decidir com segurança se há contribuição arquitetural: decidir pelo texto completo.")
 
 
-def classificar(titulo, resumo, perfil="revocacao"):
+def classificar(titulo, resumo, perfil="rigoroso"):
     """Classifica um artigo. Devolve dict com classification, code, ic, ec e justificativa.
-    perfil: "revocacao" (padrão; `no` só com evidência forte) ou "precisao" (todas as exclusões)."""
+    perfil: "rigoroso" (padrão; `yes` só com evidência forte), "revocacao" (`yes` amplo, `no` só com
+    evidência forte) ou "precisao" (todas as exclusões)."""
     return decidir(extrair(titulo, resumo), perfil)
 
 
@@ -339,7 +429,7 @@ def main():
     pre = argparse.ArgumentParser(add_help=False)
     pre.add_argument("--titulo")
     pre.add_argument("--resumo", default="")
-    pre.add_argument("--perfil", choices=["revocacao", "precisao"], default="revocacao")
+    pre.add_argument("--perfil", choices=["revocacao", "precisao", "rigoroso"], default="rigoroso")
     p_args, resto = pre.parse_known_args()
     if p_args.titulo is not None:  # teste de um único artigo
         r = classificar(p_args.titulo, p_args.resumo, p_args.perfil)
@@ -350,8 +440,9 @@ def main():
         description="Triagem por título + resumo só com regras (sem Claude). Para testar um artigo avulso: "
                     "--titulo \"...\" --resumo \"...\"")
     TR.adicionar_args_planilha(ap)
-    ap.add_argument("--perfil", choices=["revocacao", "precisao"], default="revocacao",
-                    help="revocacao (padrão): `no` só com evidência forte, na dúvida `maybe`; "
+    ap.add_argument("--perfil", choices=["revocacao", "precisao", "rigoroso"], default="rigoroso",
+                    help="rigoroso (padrão): `yes` só com evidência forte (o que não passa vira `maybe`); "
+                         "revocacao: `yes` mais amplo, `no` só com evidência forte; "
                          "precisao: aplica todas as regras de exclusão (mais `no`, perde mais artigos relevantes)")
     args = ap.parse_args(resto)
     args.perfil = p_args.perfil  # o parser prévio já consumiu --perfil

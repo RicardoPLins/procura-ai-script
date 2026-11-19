@@ -11,15 +11,6 @@ prompt.md (arquétipos A-E, exclusões NIC7/NIC1/EC1/EC2/EC5/NIC8) e grava as me
   abstract_justificativa, final_classification
 A justificativa diz qual regra decidiu e quais trechos do título/resumo a acionaram.
 
-LIMITAÇÃO (leia antes de usar)
-  O prompt pede para julgar "pelo significado" (por exemplo, se um modelo multimodal tem
-  contribuição arquitetural ou é só uma rede de ML). Regras só enxergam palavras. Elas acertam bem
-  os casos de vocabulário claro (survey, agentes, RAG, benchmark, segurança, "multimodal" em
-  sentido não computacional) e erram mais na fronteira entre E (framework multimodal), EC1 (modelo
-  de ML puro) e M (maybe). Por isso o script foi calibrado contra os rótulos do Claude em
-  amostra_1000.csv e contra o conjunto ouro (artigos_ouro.csv); veja o README.md para os números.
-  Trate o resultado como triagem de apoio e revise os "maybe" e os "yes".
-
 USO
   python3 triagem_resumos_deterministica.py triagem_titulo.csv --amostra 50 --so-avaliados -o amostra.csv
   python3 triagem_resumos_deterministica.py triagem_titulo.csv -o triagem_resumo.csv
